@@ -70,9 +70,9 @@
 
     <script type="module">
         // --- Firebase SDK Imports ---
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
         document.addEventListener('DOMContentLoaded', async () => {
             // --- DOM Elements ---
@@ -98,11 +98,21 @@
             
             // --- Firebase Setup ---
             let db, auth;
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'lingua-bot-app';
+            const appId = "lingua-bot-app"; // Default App ID
             
             async function initFirebase() {
                 try {
-                    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                    // Your web app's Firebase configuration
+                    const firebaseConfig = {
+                        apiKey: "AIzaSyAtwkV8atJEQTDWW-UazpDtXkUOPmJEYY8",
+                        authDomain: "linguabot-1d3ab.firebaseapp.com",
+                        projectId: "linguabot-1d3ab",
+                        storageBucket: "linguabot-1d3ab.appspot.com",
+                        messagingSenderId: "1023245573224",
+                        appId: "1:1023245573224:web:1928d58f758f598364efdd"
+                    };
+
+                    // Initialize Firebase
                     const app = initializeApp(firebaseConfig);
                     db = getFirestore(app);
                     auth = getAuth(app);
@@ -113,13 +123,7 @@
                             state.userId = user.uid;
                             await loadUserData();
                         } else {
-                            // If no user, sign in.
-                            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                            if (token) {
-                                await signInWithCustomToken(auth, token);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
+                            await signInAnonymously(auth);
                         }
                     });
                 } catch (error) {
@@ -131,7 +135,8 @@
             // --- Firestore Data Functions ---
             const getUserDocRef = () => {
                 if (!state.userId) return null;
-                return doc(db, "artifacts", appId, "users", state.userId, "progress", "main");
+                // Using a simplified path for broader compatibility.
+                return doc(db, "users", state.userId);
             };
 
             async function saveUserData() {
