@@ -98,7 +98,6 @@
             
             // --- Firebase Setup ---
             let db, auth;
-            const appId = "lingua-bot-app"; // Default App ID
             
             async function initFirebase() {
                 try {
@@ -120,22 +119,24 @@
 
                     onAuthStateChanged(auth, async (user) => {
                         if (user) {
+                            console.log("Auth state changed: User is signed in with UID:", user.uid);
                             state.userId = user.uid;
                             await loadUserData();
                         } else {
+                            console.log("Auth state changed: User is signed out. Attempting anonymous sign-in.");
                             await signInAnonymously(auth);
                         }
                     });
                 } catch (error) {
                     console.error("Firebase initialization failed:", error);
                     progressDisplay.textContent = "Error: Could not connect to service.";
+                    addBotMessage("I'm having trouble connecting to the main service. Please check your internet connection and refresh the page.");
                 }
             }
 
             // --- Firestore Data Functions ---
             const getUserDocRef = () => {
                 if (!state.userId) return null;
-                // Using a simplified path for broader compatibility.
                 return doc(db, "users", state.userId);
             };
 
@@ -182,7 +183,8 @@
                     }
                 } catch (error) {
                     console.error("Error loading user data:", error);
-                    advanceConversation('start_welcome');
+                    progressDisplay.textContent = "Error: Cannot load profile.";
+                    addBotMessage(`I couldn't load your profile. This might be due to a network issue or incorrect database security rules. Please check your setup and refresh.`);
                 }
             }
             
@@ -223,7 +225,7 @@
                 goal_select: (language) => ({ message: `Perfect. We'll focus on professional skills. One last question: How would you describe your current level in ${language}?`, options: ["I'm a complete beginner"], nextStage: 'level_select' }),
                 level_select: { message: "Great! Before we start, let's do a quick microphone check.", options: ["Check Microphone"], nextStage: 'mic_check' },
                 mic_check: {
-                    success: { message: "Excellent, your microphone is working perfectly! Let's begin your first lesson. Are you ready?", options: ["Yes, let's start!"], nextStage: 'start_lesson_1' },
+                    success: { message: "Excellent, your microphone is working perfectly! Let's begin your first lesson. Are you ready?", options: ["Yes, let's start!"] },
                     failure: { message: "It seems there was a problem. Please check your browser permissions and network connection.", options: ["Try Mic Check Again"], nextStage: 'mic_check_retry' }
                 },
                 lesson_complete: { message: `EXCELLENT! That was a perfect attempt! Lesson complete!`, options: ["Continue to next lesson"], nextStage: 'start_next_lesson' }
@@ -335,7 +337,7 @@
                             state.currentStage = currentStep.nextStage;
                         }
                         break;
-                    case 'start_lesson_1':
+                    case 'mic_check_complete':
                         startLesson(1);
                         break;
                     case 'start_next_lesson':
@@ -368,7 +370,7 @@
                         saveUserData();
                         const { success } = conversationFlow.mic_check;
                         addBotMessage(success.message, success.options);
-                        state.currentStage = 'start_lesson_1';
+                        state.currentStage = 'mic_check_complete';
                         micButton.disabled = true;
                     } else {
                         addUserMessage(transcript);
