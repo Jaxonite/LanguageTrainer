@@ -41,7 +41,10 @@
         
         <!-- Header -->
         <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
-            <h1 class="text-xl font-bold text-slate-800">LinguaBot</h1>
+            <div>
+                <h1 class="text-xl font-bold text-slate-800">LinguaBot</h1>
+                <p id="progress-display" class="text-xs text-blue-600 font-semibold mt-1">Loading progress...</p>
+            </div>
             <div id="status" class="text-right">
                 <p class="text-sm font-medium text-slate-600" id="language-display">No Language</p>
                 <p class="text-xs text-slate-400" id="goal-display">No Goal Selected</p>
@@ -65,42 +68,133 @@
 
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
+    <script type="module">
+        // --- Firebase SDK Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        document.addEventListener('DOMContentLoaded', async () => {
             // --- DOM Elements ---
             const chatContainer = document.getElementById('chat-container');
             const micButton = document.getElementById('mic-button');
             const micHelper = document.getElementById('mic-helper');
             const languageDisplay = document.getElementById('language-display');
             const goalDisplay = document.getElementById('goal-display');
+            const progressDisplay = document.getElementById('progress-display');
 
             // --- App State ---
             let state = {
                 currentLanguage: null,
                 learningGoal: null,
-                currentStage: 'welcome', // welcome, language_select, goal_select, level_select, mic_check, mic_check_retry, lesson_intro, lesson_practice
-                userName: 'Rajesh', // Let's assume the user's name for the script
+                currentLesson: 1,
+                completedLessons: 0,
+                currentStage: 'loading',
+                userName: 'User',
                 isListening: false,
+                userId: null,
+                micChecked: false,
             };
+            
+            // --- Firebase Setup ---
+            let db, auth;
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'lingua-bot-app';
+            
+            async function initFirebase() {
+                try {
+                    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                    const app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    setLogLevel('debug');
+
+                    onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            state.userId = user.uid;
+                            await loadUserData();
+                        } else {
+                            // If no user, sign in.
+                            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                            if (token) {
+                                await signInWithCustomToken(auth, token);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        }
+                    });
+                } catch (error) {
+                    console.error("Firebase initialization failed:", error);
+                    progressDisplay.textContent = "Error: Could not connect to service.";
+                }
+            }
+
+            // --- Firestore Data Functions ---
+            const getUserDocRef = () => {
+                if (!state.userId) return null;
+                return doc(db, "artifacts", appId, "users", state.userId, "progress", "main");
+            };
+
+            async function saveUserData() {
+                if (!state.userId) return;
+                const userDocRef = getUserDocRef();
+                const dataToSave = {
+                    currentLanguage: state.currentLanguage,
+                    learningGoal: state.learningGoal,
+                    completedLessons: state.completedLessons,
+                    micChecked: state.micChecked,
+                };
+                try {
+                    await setDoc(userDocRef, dataToSave, { merge: true });
+                } catch (error) {
+                    console.error("Error saving user data:", error);
+                }
+            }
+
+            async function loadUserData() {
+                if (!state.userId) return;
+                const userDocRef = getUserDocRef();
+                try {
+                    const docSnap = await getDoc(userDocRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        state.currentLanguage = data.currentLanguage || null;
+                        state.learningGoal = data.learningGoal || null;
+                        state.completedLessons = data.completedLessons || 0;
+                        state.micChecked = data.micChecked || false;
+                        state.currentLesson = state.completedLessons + 1;
+                        
+                        updateUIFromState();
+
+                        if (state.currentLanguage) {
+                            addBotMessage(`Welcome back! Let's continue learning ${state.currentLanguage}.`);
+                            startLesson(state.currentLesson);
+                        } else {
+                            advanceConversation('start_welcome');
+                        }
+                    } else {
+                        // New user
+                        advanceConversation('start_welcome');
+                    }
+                } catch (error) {
+                    console.error("Error loading user data:", error);
+                    advanceConversation('start_welcome');
+                }
+            }
+            
+            function updateUIFromState() {
+                if(state.currentLanguage) languageDisplay.textContent = state.currentLanguage;
+                if(state.learningGoal) goalDisplay.textContent = state.learningGoal;
+                progressDisplay.textContent = `Progress: Lesson ${state.currentLesson}`;
+            }
 
             // --- Language-Specific Lesson Content ---
             const lessons = {
-                'English': {
-                    introPhrase: `"Hello, my name is..."`,
-                    nativeComparison: 'In Hindi, this is like saying: "नमस्ते, मेरा नाम है..."',
-                    breakdown: [
-                        '<b>Hello:</b> A common greeting.',
-                        '<b>My:</b> Shows that something belongs to you (मेरा).',
-                        '<b>Name:</b> Your name (नाम).',
-                        '<b>Is:</b> The verb \'to be\' (है).'
-                    ],
-                    practiceSentence: 'Hello, my name is Rajesh.',
-                    recognitionLang: 'en-US'
-                },
-                'French': { introPhrase: `"Bonjour, je m'appelle..."`, nativeComparison: 'In English, this is like saying: "Hello, my name is..."', breakdown: [ '<b>Bonjour:</b> Hello.', '<b>Je:</b> I.', "<b>m'appelle:</b> call myself.", ], practiceSentence: "Bonjour, je m'appelle Rajesh.", recognitionLang: 'fr-FR' },
-                'Spanish': { introPhrase: `"Hola, me llamo..."`, nativeComparison: 'In English, this is like saying: "Hello, my name is..."', breakdown: [ '<b>Hola:</b> Hello.', '<b>Me:</b> myself.', "<b>llamo:</b> I call.", ], practiceSentence: "Hola, me llamo Rajesh.", recognitionLang: 'es-ES' },
-                'German': { introPhrase: `"Hallo, ich heiße..."`, nativeComparison: 'In English, this is like saying: "Hello, my name is..."', breakdown: [ '<b>Hallo:</b> Hello.', '<b>Ich:</b> I.', "<b>heiße:</b> am called.", ], practiceSentence: "Hallo, ich heiße Rajesh.", recognitionLang: 'de-DE' },
-                'Mandarin': { introPhrase: `"你好, 我叫..." (Nǐ hǎo, wǒ jiào...)"`, nativeComparison: 'In English, this is like saying: "Hello, my name is..."', breakdown: [ '<b>你好 (Nǐ hǎo):</b> Hello.', '<b>我 (wǒ):</b> I.', "<b>叫 (jiào):</b> to be called.", ], practiceSentence: "Nǐ hǎo, wǒ jiào Rajesh.", recognitionLang: 'zh-CN' }
+                'English': [
+                    null, // index 0 is unused
+                    { title: "Introduction", introPhrase: `"Hello, my name is..."`, nativeComparison: 'In Hindi, this is like saying: "नमस्ते, मेरा नाम है..."', breakdown: [ '<b>Hello:</b> A common greeting.', '<b>My:</b> Shows that something belongs to you (मेरा).', '<b>Name:</b> Your name (नाम).', '<b>Is:</b> The verb \'to be\' (है).' ], practiceSentence: 'Hello, my name is Rajesh.', recognitionLang: 'en-US' },
+                    { title: "Asking Names", introPhrase: `"What is your name?"`, nativeComparison: 'In Hindi: "आपका नाम क्या है?"', breakdown: [ '<b>What:</b> A question word.', '<b>is your:</b> Asks about something belonging to the other person.', '<b>name:</b> (नाम).', ], practiceSentence: 'What is your name?', recognitionLang: 'en-US' }
+                ],
+                // Add more lessons for other languages here
             };
 
             // --- Speech Recognition Setup ---
@@ -114,32 +208,20 @@
             } else {
                 console.error("Speech Recognition not supported in this browser.");
                 micButton.disabled = true;
-                micHelper.textContent = "Speech recognition is not supported in your browser.";
+                micHelper.textContent = "Speech recognition is not supported.";
             }
             
             // --- Bot Conversation Logic ---
             const conversationFlow = {
-                welcome: { message: "Namaste! 🙏 Welcome to LinguaBot. I'm your personal AI tutor, here to help you master any language. To get started, what language would you like to learn?", options: ['English', 'French', 'Spanish', 'German', 'Mandarin'], nextStage: 'language_select' },
-                language_select: (language) => ({ message: `Great choice! ${language} is a fantastic language for global communication. Now, let's personalize your learning path. Why are you learning ${language}?`, options: ['✈️ Travel', '💼 Business & Career', '❤️ Family & Friends', '🧠 Brain Training'], nextStage: 'goal_select' }),
-                goal_select: (language) => ({ message: `Perfect. We'll focus on the professional communication skills you need to succeed. One last question: How would you describe your current level in ${language}?`, options: ["I'm a complete beginner", "I know a few words", "I can have a simple conversation"], nextStage: 'level_select' }),
-                level_select: { message: "Great! Before we start your first lesson, let's do a quick microphone check to make sure everything is working correctly.", options: ["Check Microphone"], nextStage: 'mic_check' },
+                welcome: { message: "Namaste! 🙏 Welcome to LinguaBot. I'm your personal AI tutor. To get started, what language would you like to learn?", options: ['English', 'French', 'Spanish', 'German', 'Mandarin'], nextStage: 'language_select' },
+                language_select: (language) => ({ message: `Great choice! ${language} is a fantastic language. Now, let's personalize your learning path. Why are you learning ${language}?`, options: ['✈️ Travel', '💼 Business & Career', '❤️ Family & Friends', '🧠 Brain Training'], nextStage: 'goal_select' }),
+                goal_select: (language) => ({ message: `Perfect. We'll focus on professional skills. One last question: How would you describe your current level in ${language}?`, options: ["I'm a complete beginner"], nextStage: 'level_select' }),
+                level_select: { message: "Great! Before we start, let's do a quick microphone check.", options: ["Check Microphone"], nextStage: 'mic_check' },
                 mic_check: {
-                    success: { message: "Excellent, your microphone is working perfectly! Let's begin your first lesson. Are you ready?", options: ["Yes, let's start!"], nextStage: 'lesson_intro' },
-                    failure: { message: "It seems there was a problem with the microphone. Please check your browser permissions and network connection.", options: ["Try Mic Check Again"], nextStage: 'mic_check_retry' }
+                    success: { message: "Excellent, your microphone is working perfectly! Let's begin your first lesson. Are you ready?", options: ["Yes, let's start!"], nextStage: 'start_lesson_1' },
+                    failure: { message: "It seems there was a problem. Please check your browser permissions and network connection.", options: ["Try Mic Check Again"], nextStage: 'mic_check_retry' }
                 },
-                lesson_intro: (language) => {
-                    const lesson = lessons[language] || lessons['English'];
-                    return { message: `Let's learn a very important phrase: <b>${lesson.introPhrase}</b><br><br>${lesson.nativeComparison}<br><br>Let's break it down:<br>• ${lesson.breakdown.join('<br>• ')}<br><br>Now, it's your turn to practice. I want you to say the full phrase with your name at the end. For example, you would say, "<i>${lesson.practiceSentence}</i>"<br><br>Press the microphone button below and say the sentence.`, nextStage: 'lesson_practice' };
-                },
-                lesson_practice_feedback: (analysis) => {
-                    let feedbackMessage = `Okay, great first attempt, ${state.userName}! Here is your detailed analysis:`;
-                    if (analysis.overallScore > 90) feedbackMessage = `EXCELLENT! That was a huge improvement, ${state.userName}!`;
-                    const message = `${feedbackMessage}<div class="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">${analysis.htmlReport}</div><br>Let's try again. Focus on the sounds for any highlighted words. You can do it!`;
-                    addBotMessage(message);
-                    state.currentStage = 'lesson_practice';
-                    micButton.disabled = false;
-                },
-                lesson_complete: { message: `EXCELLENT! That was a perfect attempt!<br><br><b>You have successfully learned your first sentence in ${state.currentLanguage}!</b><br><br><b>Lesson 1 complete!</b> You learned:<br>• How to introduce yourself.<br>• Correct pronunciation.<br><br>We'll save your progress. Keep up the fantastic work!`, options: ["Continue to next lesson", "End Session for Today"], nextStage: 'end' }
+                lesson_complete: { message: `EXCELLENT! That was a perfect attempt! Lesson complete!`, options: ["Continue to next lesson"], nextStage: 'start_next_lesson' }
             };
 
             // --- UI Functions ---
@@ -192,60 +274,96 @@
                 setTimeout(() => advanceConversation(optionText), 500);
             };
 
+            function startLesson(lessonNumber) {
+                const langLessons = lessons[state.currentLanguage];
+                if (langLessons && langLessons[lessonNumber]) {
+                    const lesson = langLessons[lessonNumber];
+                    state.currentLesson = lessonNumber;
+                    updateUIFromState();
+                    const message = `<b>Lesson ${lessonNumber}: ${lesson.title}</b><br><br>Let's learn the phrase: <b>${lesson.introPhrase}</b><br><br>${lesson.nativeComparison}<br><br>Let's break it down:<br>• ${lesson.breakdown.join('<br>• ')}<br><br>Now, it's your turn to practice. Say, "<i>${lesson.practiceSentence}</i>"<br><br>Press the microphone button below.`;
+                    addBotMessage(message);
+                    state.currentStage = 'lesson_practice';
+                    if(recognition) recognition.lang = lesson.recognitionLang;
+                    micButton.disabled = false;
+                } else {
+                    addBotMessage("Congratulations! You've completed all available lessons for this language. Check back later for more!");
+                    micButton.disabled = true;
+                }
+            }
+
             const advanceConversation = (userInput = null) => {
                 micButton.disabled = true;
                 let currentStep;
-                switch (state.currentStage) {
-                    case 'welcome': currentStep = conversationFlow.welcome; addBotMessage(currentStep.message, currentStep.options); state.currentStage = currentStep.nextStage; break;
-                    case 'language_select': state.currentLanguage = userInput; languageDisplay.textContent = state.currentLanguage; currentStep = conversationFlow.language_select(userInput); addBotMessage(currentStep.message, currentStep.options); state.currentStage = currentStep.nextStage; break;
-                    case 'goal_select': state.learningGoal = userInput.split(' ')[1]; goalDisplay.textContent = state.learningGoal; currentStep = conversationFlow.goal_select(state.currentLanguage); addBotMessage(currentStep.message, currentStep.options); state.currentStage = currentStep.nextStage; break;
-                    case 'level_select': currentStep = conversationFlow.level_select; addBotMessage(currentStep.message, currentStep.options); state.currentStage = currentStep.nextStage; break;
-                    case 'lesson_intro': if (recognition) { recognition.lang = lessons[state.currentLanguage]?.recognitionLang || 'en-US'; } currentStep = conversationFlow.lesson_intro(state.currentLanguage); addBotMessage(currentStep.message); state.currentStage = currentStep.nextStage; micButton.disabled = false; break;
+
+                const stage = state.currentStage;
+
+                if (userInput === 'start_welcome') {
+                    currentStep = conversationFlow.welcome;
+                    addBotMessage(currentStep.message, currentStep.options);
+                    state.currentStage = currentStep.nextStage;
+                    return;
+                }
+
+                switch (stage) {
+                    case 'language_select':
+                        state.currentLanguage = userInput;
+                        saveUserData();
+                        updateUIFromState();
+                        currentStep = conversationFlow.language_select(userInput);
+                        addBotMessage(currentStep.message, currentStep.options);
+                        state.currentStage = currentStep.nextStage;
+                        break;
+                    case 'goal_select':
+                        state.learningGoal = userInput.split(' ')[1];
+                        saveUserData();
+                        updateUIFromState();
+                        currentStep = conversationFlow.goal_select(state.currentLanguage);
+                        addBotMessage(currentStep.message, currentStep.options);
+                        state.currentStage = currentStep.nextStage;
+                        break;
+                    case 'level_select':
+                        if (state.micChecked) {
+                            startLesson(1);
+                        } else {
+                            currentStep = conversationFlow.level_select;
+                            addBotMessage(currentStep.message, currentStep.options);
+                            state.currentStage = currentStep.nextStage;
+                        }
+                        break;
+                    case 'start_lesson_1':
+                        startLesson(1);
+                        break;
+                    case 'start_next_lesson':
+                        state.completedLessons = state.currentLesson;
+                        state.currentLesson++;
+                        saveUserData();
+                        startLesson(state.currentLesson);
+                        break;
                 }
             };
             
             // --- Microphone Logic ---
             if (recognition) {
                 micButton.addEventListener('click', () => {
-                    if (state.isListening) {
-                        recognition.stop();
-                        return;
-                    }
+                    if (state.isListening) { recognition.stop(); return; }
                     micButton.classList.add('listening');
                     micHelper.textContent = "Starting mic...";
                     micButton.disabled = true;
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        console.error("Error starting recognition:", e);
-                        micHelper.textContent = "Could not start microphone. Please check permissions.";
-                        micButton.classList.remove('listening');
-                        micButton.disabled = false;
-                    }
+                    try { recognition.start(); } catch (e) { console.error("Error starting recognition:", e); micHelper.textContent = "Could not start mic."; micButton.classList.remove('listening'); micButton.disabled = false; }
                 });
 
-                recognition.onstart = () => {
-                    state.isListening = true;
-                    micButton.disabled = false; // Allow user to click again to stop
-                    micHelper.textContent = "Listening... Speak now!";
-                };
-
-                recognition.onend = () => {
-                    state.isListening = false;
-                    micButton.classList.remove('listening');
-                    micHelper.textContent = "Press the mic to speak.";
-                    // Re-enable button if we are in a stage that allows speaking
-                    const canSpeak = state.currentStage === 'lesson_practice' || state.currentStage === 'mic_check' || state.currentStage === 'mic_check_retry';
-                    micButton.disabled = !canSpeak;
-                };
+                recognition.onstart = () => { state.isListening = true; micButton.disabled = false; micHelper.textContent = "Listening... Speak now!"; };
+                recognition.onend = () => { state.isListening = false; micButton.classList.remove('listening'); micHelper.textContent = "Press the mic to speak."; const canSpeak = state.currentStage === 'lesson_practice' || state.currentStage === 'mic_check' || state.currentStage === 'mic_check_retry'; micButton.disabled = !canSpeak; };
                 
                 recognition.onresult = (event) => {
                     const transcript = event.results[0][0].transcript;
                     if (state.currentStage === 'mic_check') {
                         addUserMessage(`(Mic Check) ${transcript}`);
+                        state.micChecked = true;
+                        saveUserData();
                         const { success } = conversationFlow.mic_check;
                         addBotMessage(success.message, success.options);
-                        state.currentStage = success.nextStage;
+                        state.currentStage = 'start_lesson_1';
                         micButton.disabled = true;
                     } else {
                         addUserMessage(transcript);
@@ -256,23 +374,16 @@
                 
                 recognition.onerror = (event) => {
                     console.error("Speech recognition error:", event.error);
-                    let errorMessage = "Sorry, an error occurred. Please try again.";
-                    if (event.error === 'network') {
-                        errorMessage = "Network error. Please check your connection and try again.";
-                    } else if (event.error === 'no-speech') {
-                        errorMessage = "I didn't hear you. Please press the mic and speak clearly.";
-                    } else if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-                        errorMessage = "Mic access denied. Please allow microphone in your browser settings.";
-                        micButton.disabled = true; // Permanently disable if permission is the core issue
-                    }
+                    let errorMessage = "Sorry, an error occurred.";
+                    if (event.error === 'network') errorMessage = "Network error. Check your connection.";
+                    else if (event.error === 'no-speech') errorMessage = "I didn't hear you. Please speak clearly.";
+                    else if (event.error === 'not-allowed') { errorMessage = "Mic access denied."; micButton.disabled = true; }
                     
                     if (state.currentStage === 'mic_check') {
                         const { failure } = conversationFlow.mic_check;
                         addBotMessage(`${errorMessage}<br><br>${failure.message}`, failure.options);
                         state.currentStage = failure.nextStage;
-                    } else {
-                        micHelper.textContent = errorMessage;
-                    }
+                    } else { micHelper.textContent = errorMessage; }
                 };
             }
 
@@ -284,37 +395,31 @@
                     state.currentStage = completeStep.nextStage;
                     micButton.disabled = true;
                 } else {
-                    conversationFlow.lesson_practice_feedback(analysis);
+                    const feedbackMessage = `Okay, great attempt! Here is your analysis:<div class="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">${analysis.htmlReport}</div><br>Let's try again. You can do it!`;
+                    addBotMessage(feedbackMessage);
+                    state.currentStage = 'lesson_practice';
+                    micButton.disabled = false;
                 }
             };
 
             // --- Analysis Simulation ---
             const simulateAnalysis = (text) => {
-                if (state.currentLanguage !== 'English') {
-                    return { overallScore: 100, htmlReport: `<h4 class="font-bold text-lg mb-2">Analysis Report</h4><p class="mb-4"><b>Your sentence:</b> "${text}"</p><div class="pl-4 border-l-4 border-green-400"><p class="font-semibold text-green-700">✅ Great attempt! The analysis engine for ${state.currentLanguage} is still under development.</p></div>` };
-                }
-                
+                if (state.currentLanguage !== 'English') { return { overallScore: 100, htmlReport: `<h4 class="font-bold text-lg mb-2">Analysis Report</h4><p class="mb-4"><b>Your sentence:</b> "${text}"</p><div class="pl-4 border-l-4 border-green-400"><p class="font-semibold text-green-700">✅ Great attempt! Analysis for ${state.currentLanguage} is developing.</p></div>` }; }
                 let score = 100;
                 let issues = [];
                 const words = text.toLowerCase().split(' ');
-
                 if (words.includes('mai')) { score -= 15; issues.push({ word: 'my', found: 'mai', fix: "The correct English sound is /maɪ/. Try opening your mouth wider, like when saying 'eye'." }); }
                 if (words.includes('ij')) { score -= 15; issues.push({ word: 'is', found: 'ij', fix: "The 's' here should sound like a 'z'. Try to make a light buzzing sound: is-zzz." }); }
-                if (words.includes('nem')) { score -= 10; issues.push({ word: 'name', found: 'nem', fix: "Ensure you pronounce the 'a' sound clearly, like in 'game'." }); }
-                if (!words.includes('hello') || !words.includes('name') || !words.includes('is')) { score -= 30; issues.push({ word: 'Overall Structure', found: 'Missing words', fix: "The sentence seems incomplete. Make sure to include all the words: 'Hello, my name is...'" }); }
-                
-                let htmlReport = `<h4 class="font-bold text-lg mb-2">Analysis Report</h4><p class="mb-4"><b>Your sentence:</b> "${text}"</p><div class="space-y-3"><div><strong class="font-semibold">1. Pronunciation & Phonetics:</strong> <span class="font-bold ${score > 80 ? 'text-green-600' : 'text-amber-600'}">${score > 80 ? 'Excellent!' : 'Good Effort!'} (${Math.max(0, score)}% Accuracy)</span></div>`;
-                if (issues.length > 0) {
-                    issues.forEach(issue => { htmlReport += `<div class="pl-4 border-l-4 border-amber-400"><p class="font-semibold text-amber-700">⚠️ Slight Mispronunciation on <span class="font-bold">"${issue.word}"</span></p><p class="text-slate-600 text-sm">You pronounced it more like <span class="italic">"${issue.found}"</span>. ${issue.fix}</p></div>`; });
-                } else {
-                     htmlReport += `<div class="pl-4 border-l-4 border-green-400"><p class="font-semibold text-green-700">✅ Perfect pronunciation on all words!</p></div>`;
-                }
-                htmlReport += `<div class="pt-2"><strong class="font-semibold">2. Grammar & Syntax:</strong> <span class="font-bold text-green-600">Perfect!</span></div><div class="pl-4 border-l-4 border-green-400"><p class="text-slate-600 text-sm">You used the correct sentence structure. Great job!</p></div></div>`;
+                if (!words.includes('hello') || !words.includes('name') || !words.includes('is')) { score -= 30; issues.push({ word: 'Overall Structure', found: 'Missing words', fix: "The sentence seems incomplete. Make sure to include all the words." }); }
+                let htmlReport = `<h4 class="font-bold text-lg mb-2">Analysis Report</h4><p class="mb-4"><b>Your sentence:</b> "${text}"</p><div class="space-y-3"><div><strong class="font-semibold">1. Pronunciation:</strong> <span class="font-bold ${score > 80 ? 'text-green-600' : 'text-amber-600'}">${score > 80 ? 'Excellent!' : 'Good Effort!'} (${Math.max(0, score)}% Accuracy)</span></div>`;
+                if (issues.length > 0) { issues.forEach(issue => { htmlReport += `<div class="pl-4 border-l-4 border-amber-400"><p class="font-semibold text-amber-700">⚠️ Mispronunciation on <span class="font-bold">"${issue.word}"</span></p><p class="text-slate-600 text-sm">You said <span class="italic">"${issue.found}"</span>. ${issue.fix}</p></div>`; }); } 
+                else { htmlReport += `<div class="pl-4 border-l-4 border-green-400"><p class="font-semibold text-green-700">✅ Perfect pronunciation on all words!</p></div>`; }
+                htmlReport += `<div class="pt-2"><strong class="font-semibold">2. Grammar:</strong> <span class="font-bold text-green-600">Perfect!</span></div></div>`;
                 return { overallScore: Math.max(0, score), htmlReport: htmlReport };
             };
 
             // --- Initial Kick-off ---
-            setTimeout(() => advanceConversation(), 500);
+            await initFirebase();
         });
     </script>
 </body>
